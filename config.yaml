@@ -1,0 +1,19 @@
+ai:
+  provider: openai
+  api_key: "${OPENAI_API_KEY}"
+  model: gpt-4o-mini
+  max_retries: 5
+
+whisper:
+  model: base
+
+paths:
+  cookies: cookies.txt
+  urls: urls.txt
+  tmp: tmp/
+  output: output/collections/
+  failed: output/failed.txt
+
+processing:
+  sequential: true
+  retry_attempts: 5
