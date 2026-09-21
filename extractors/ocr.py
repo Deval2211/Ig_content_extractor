@@ -1,29 +1,40 @@
 #!/usr/bin/env python3
 """
 OCR module - pytesseract wrapper for image text extraction
+Based on Deval2211/Image_to_text repo preprocessing pipeline
 """
 
-from PIL import Image, ImageOps, ImageFilter
+from PIL import Image, ImageFilter, ImageOps
 import pytesseract
 
+def preprocess_image(image: Image.Image) -> Image.Image:
+    """Gentle cleanup to help OCR - from Image_to_text repo"""
+    # Convert to grayscale
+    gray = image.convert("L")
+    # Light denoise - size=3 is fine for most scans
+    denoised = gray.filter(ImageFilter.MedianFilter(size=3))
+    # Stretch contrast so dim text becomes darker
+    boosted = ImageOps.autocontrast(denoised, cutoff=0.5)
+    # Return as RGB for Tesseract
+    return boosted.convert("RGB")
+
 def extract_text_from_image(image_path):
-    """Extract text from image using OCR"""
+    """Extract text from image using OCR with Image_to_text preprocessing"""
     try:
-        # Open and preprocess image
-        img = Image.open(image_path)
+        # Open image
+        img = Image.open(image_path).convert("RGB")
         
-        # Convert to grayscale
-        img = ImageOps.grayscale(img)
+        # Preprocess using Image_to_text pipeline
+        cleaned = preprocess_image(img)
         
-        # Enhance contrast
-        img = ImageOps.autocontrast(img)
-        
-        # Denoise
-        img = img.filter(ImageFilter.MedianFilter())
-        
-        # Extract text
-        custom_config = r'--oem 3 --psm 6'
-        text = pytesseract.image_to_string(img, config=custom_config)
+        # Extract text with PSM 3 for fully automatic page segmentation
+        # Handles columns, mixed layouts better than PSM 6
+        custom_config = r'--oem 3 --psm 3'
+        text = pytesseract.image_to_string(
+            cleaned, 
+            lang='eng', 
+            config=custom_config
+        )
         
         return text.strip()
         
