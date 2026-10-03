@@ -40,7 +40,7 @@ ai:
   provider: nvidia_nim
   api_key: "${NVIDIA_NIM_API_KEY}"
   base_url: https://integrate.api.nvidia.com/v1
-  model: meta/llama3-8b-instruct
+  model: google/gemma-4-31b-it
 ```
 
 ```bash
@@ -98,7 +98,7 @@ ai:
   provider: nvidia_nim
   api_key: "${NVIDIA_NIM_API_KEY}"
   base_url: https://integrate.api.nvidia.com/v1
-  model: meta/llama3-8b-instruct
+  model: google/gemma-4-31b-it
   max_retries: 5
 
 whisper:

@@ -14,7 +14,7 @@ import time
 import requests
 
 NIM_BASE_URL = "https://integrate.api.nvidia.com/v1"
-DEFAULT_MODEL = "meta/llama3-8b-instruct"
+DEFAULT_MODEL = "google/gemma-4-31b-it"
 
 
 def _get_api_key(config):
