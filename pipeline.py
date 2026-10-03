@@ -15,8 +15,19 @@ from extractors.ocr import extract_text_from_image
 from ai_writer import generate_markdown
 
 def load_config():
-    with open('config.yaml', 'r') as f:
-        return yaml.safe_load(f)
+    """Load config.yaml from the project directory.
+
+    Relative paths in the config are resolved against the config file's
+    location, so the pipeline works no matter which directory it is run from.
+    """
+    cfg_path = Path(__file__).resolve().parent / 'config.yaml'
+    with open(cfg_path, 'r') as f:
+        config = yaml.safe_load(f)
+    for key, value in config.get('paths', {}).items():
+        p = Path(value)
+        if not p.is_absolute():
+            config['paths'][key] = str(cfg_path.parent / p)
+    return config
 
 def process_url(url, config, collection):
     """Process a single Instagram URL"""

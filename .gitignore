@@ -1,0 +1,12 @@
+# Secrets / credentials
+cookies.txt
+
+# Local reference checkout (separate project with its own repo)
+reels-vault/
+
+# Python
+__pycache__/
+*.pyc
+
+# Pipeline temp media (auto-cleaned)
+tmp/
