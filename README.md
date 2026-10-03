@@ -31,16 +31,23 @@ Install the [IGbulkCollector](https://github.com/doncezart/IGbulkCollector) Tamp
 2. Go to `chrome://settings/cookies` → "Export cookies"
 3. Save as `cookies.txt` in the project root
 
-### 3. Configure AI Provider
+### 3. Configure AI Provider (NVIDIA NIM)
 
-Edit `config.yaml`:
+Get a free key at https://build.nvidia.com (profile → API Keys), then either set the env var or edit `config.yaml`:
 
 ```yaml
 ai:
-  provider: openai
-  api_key: "your-api-key-here"
-  model: gpt-4o-mini
+  provider: nvidia_nim
+  api_key: "${NVIDIA_NIM_API_KEY}"
+  base_url: https://integrate.api.nvidia.com/v1
+  model: meta/llama3-8b-instruct
 ```
+
+```bash
+export NVIDIA_NIM_API_KEY="nvapi-..."
+```
+
+Without a key the pipeline still works — it just writes the raw text into the markdown template instead of an AI summary.
 
 ### 4. Run the Pipeline
 
@@ -88,9 +95,10 @@ igcontent/
 
 ```yaml
 ai:
-  provider: openai
-  api_key: "your-openai-key"
-  model: gpt-4o-mini
+  provider: nvidia_nim
+  api_key: "${NVIDIA_NIM_API_KEY}"
+  base_url: https://integrate.api.nvidia.com/v1
+  model: meta/llama3-8b-instruct
   max_retries: 5
 
 whisper:

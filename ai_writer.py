@@ -1,40 +1,137 @@
 #!/usr/bin/env python3
 """
-AI Writer module - generates markdown from extracted text
+AI Writer module - generates markdown from extracted text.
+
+Uses the NVIDIA NIM chat completions API (OpenAI-compatible endpoint) when
+an API key is available. If no key is set or the API call fails, it falls
+back to a local template so the pipeline always produces a file.
 """
 
 import os
+import re
+import time
+
+import requests
+
+NIM_BASE_URL = "https://integrate.api.nvidia.com/v1"
+DEFAULT_MODEL = "meta/llama3-8b-instruct"
+
+
+def _get_api_key(config):
+    """Resolve the NIM API key: NVIDIA_NIM_API_KEY env var first, then config.
+
+    config's ai.api_key may be a literal key, empty, or a "${VAR}"
+    placeholder that should be read from the environment.
+    """
+    key = os.environ.get('NVIDIA_NIM_API_KEY', '').strip()
+    if key:
+        return key
+    cfg_key = (config.get('ai', {}).get('api_key') or '').strip()
+    if not cfg_key:
+        return ''
+    if cfg_key.startswith('${'):
+        m = re.search(r'\$\{(\w+)\}', cfg_key)
+        return os.environ.get(m.group(1), '').strip() if m else ''
+    return cfg_key
+
+
+def _nim_chat(config, messages):
+    """Call the NIM chat completions endpoint with retries. Returns reply text."""
+    ai = config.get('ai', {})
+    api_key = _get_api_key(config)
+    if not api_key:
+        raise RuntimeError('No NVIDIA NIM API key (set NVIDIA_NIM_API_KEY or ai.api_key in config.yaml)')
+
+    url = ai.get('base_url', NIM_BASE_URL).rstrip('/') + '/chat/completions'
+    payload = {
+        'model': ai.get('model', DEFAULT_MODEL),
+        'messages': messages,
+        'temperature': 0.3,
+        'max_tokens': 1024,
+        'stream': False,
+    }
+    headers = {
+        'Authorization': f'Bearer {api_key}',
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+    }
+
+    retries = int(ai.get('max_retries', 3))
+    last_error = None
+    for attempt in range(retries):
+        try:
+            resp = requests.post(url, json=payload, headers=headers, timeout=120)
+            if resp.status_code == 429:
+                raise RuntimeError('NIM rate limited (HTTP 429)')
+            resp.raise_for_status()
+            return resp.json()['choices'][0]['message']['content'].strip()
+        except Exception as e:
+            last_error = e
+            if attempt < retries - 1:
+                time.sleep(2 * (attempt + 1))
+    raise RuntimeError(f'NIM chat failed after {retries} attempts: {last_error}')
+
+
+def _frontmatter(url, media_type, collection, title):
+    return (
+        '---\n'
+        f'url: {url}\n'
+        f'type: {media_type}\n'
+        f'collection: {collection}\n'
+        f'title: {title}\n'
+        '---\n\n'
+    )
+
 
 def generate_markdown(raw_text, url, media_type, collection, config):
-    """Generate structured markdown from extracted text"""
-    
-    # Simple template for now - can be enhanced with actual AI API
-    title = f"Instagram {media_type.title()}"
-    
-    markdown = f"""---
-url: {url}
-type: {media_type}
-collection: {collection}
----
+    """Generate a structured markdown knowledge-base entry.
 
-# {title}
+    The NIM model writes the title, summary and key points; the original
+    extracted text is appended locally (never sent back through the model)
+    so long content is never truncated. Falls back to a plain template when
+    no key is configured or the API fails.
+    """
+    raw_text = (raw_text or '').strip() or '(no text extracted)'
+    default_title = f'Instagram {media_type.title()}'
+    ai = config.get('ai', {})
 
-## Summary
-Content extracted from Instagram {media_type}.
+    if ai.get('provider', 'nvidia_nim') == 'nvidia_nim' and _get_api_key(config):
+        try:
+            prompt = (
+                'Convert the extracted content of an Instagram post into '
+                'knowledge-base notes. Reply with markdown only, in exactly this shape:\n'
+                '# <short descriptive title of the post>\n'
+                '## Summary\n<2-3 sentence summary>\n'
+                '## Key Points\n- one bullet per point (3-6 bullets)\n\n'
+                'Do NOT repeat the original content at the end — the raw text is added separately.\n\n'
+                f'Content extracted from an Instagram {media_type} ({url}):\n'
+                f'{raw_text}'
+            )
+            body = _nim_chat(config, [
+                {'role': 'system', 'content': 'You are a precise knowledge-base editor.'},
+                {'role': 'user', 'content': prompt},
+            ])
+            m = re.search(r'^#\s+(.+)$', body, flags=re.M)
+            title = m.group(1).strip() if m else default_title
+            # Drop the model's own '# title' line; we re-emit it after the frontmatter
+            body = re.sub(r'^#\s+.+$', '', body, count=1, flags=re.M).strip()
+            return (
+                _frontmatter(url, media_type, collection, title)
+                + f'# {title}\n\n'
+                + body + '\n\n'
+                + '## Full Text\n\n```text\n'
+                + raw_text + '\n```\n\n'
+                + '---\n*Generated by IG Content Extractor*\n'
+            )
+        except Exception as e:
+            print(f'  AI summary failed ({e}); using template fallback')
 
-## Key Points
-- Content type: {media_type}
-- Source: Instagram
-- Collection: {collection}
-
-## Full Text
-
-```text
-{raw_text}
-```
-
----
-*Generated by IG Content Extractor*
-"""
-    
-    return markdown
+    # Fallback: no key configured or API unavailable
+    return (
+        _frontmatter(url, media_type, collection, default_title)
+        + f'# {default_title}\n\n'
+        + '> AI summary skipped (no NIM key configured or API unavailable).\n\n'
+        + '## Full Text\n\n```text\n'
+        + raw_text + '\n```\n\n'
+        + '---\n*Generated by IG Content Extractor*\n'
+    )
