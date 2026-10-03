@@ -15,6 +15,7 @@ import requests
 
 NIM_BASE_URL = "https://integrate.api.nvidia.com/v1"
 DEFAULT_MODEL = "google/gemma-4-31b-it"
+DEFAULT_FALLBACK_MODEL = "meta/muse-glimmer-30b"
 
 
 def _get_api_key(config):
@@ -35,21 +36,32 @@ def _get_api_key(config):
     return cfg_key
 
 
+class _ModelUnavailable(Exception):
+    """Model-level failure (403/404/...): retrying the same model is pointless."""
+
+
+class _Fatal(Exception):
+    """Failure that is not worth retrying or falling back on (e.g. bad API key)."""
+
+
 def _nim_chat(config, messages):
-    """Call the NIM chat completions endpoint with retries. Returns reply text."""
+    """Call the NIM chat completions endpoint. Returns reply text.
+
+    Tries the primary model first; if it fails with a model-level error
+    (401/403/404 — e.g. not available on the plan), falls back to
+    `ai.fallback_model` (default: meta/muse-glimmer-30b). Transient errors
+    (429/5xx) are retried on the same model before giving up.
+    """
     ai = config.get('ai', {})
     api_key = _get_api_key(config)
     if not api_key:
         raise RuntimeError('No NVIDIA NIM API key (set NVIDIA_NIM_API_KEY or ai.api_key in config.yaml)')
 
+    primary = ai.get('model', DEFAULT_MODEL)
+    fallback = ai.get('fallback_model', DEFAULT_FALLBACK_MODEL)
+    models = [primary] + ([fallback] if fallback and fallback != primary else [])
+
     url = ai.get('base_url', NIM_BASE_URL).rstrip('/') + '/chat/completions'
-    payload = {
-        'model': ai.get('model', DEFAULT_MODEL),
-        'messages': messages,
-        'temperature': 0.3,
-        'max_tokens': 1024,
-        'stream': False,
-    }
     headers = {
         'Authorization': f'Bearer {api_key}',
         'Content-Type': 'application/json',
@@ -58,18 +70,35 @@ def _nim_chat(config, messages):
 
     retries = int(ai.get('max_retries', 3))
     last_error = None
-    for attempt in range(retries):
-        try:
-            resp = requests.post(url, json=payload, headers=headers, timeout=120)
-            if resp.status_code == 429:
-                raise RuntimeError('NIM rate limited (HTTP 429)')
-            resp.raise_for_status()
-            return resp.json()['choices'][0]['message']['content'].strip()
-        except Exception as e:
-            last_error = e
-            if attempt < retries - 1:
-                time.sleep(2 * (attempt + 1))
-    raise RuntimeError(f'NIM chat failed after {retries} attempts: {last_error}')
+    for model in models:
+        payload = {
+            'model': model,
+            'messages': messages,
+            'temperature': 0.3,
+            'max_tokens': 1024,
+            'stream': False,
+        }
+        for attempt in range(retries):
+            try:
+                resp = requests.post(url, json=payload, headers=headers, timeout=120)
+                if resp.status_code == 401:
+                    raise _Fatal('NIM rejected the API key (HTTP 401) — check NVIDIA_NIM_API_KEY')
+                if resp.status_code == 429:
+                    raise RuntimeError('NIM rate limited (HTTP 429)')
+                if 400 <= resp.status_code < 500 and resp.status_code != 408:
+                    raise _ModelUnavailable(f'NIM rejected model {model!r}: HTTP {resp.status_code}')
+                resp.raise_for_status()
+                return resp.json()['choices'][0]['message']['content'].strip()
+            except _Fatal:
+                raise  # bad key etc. — no point retrying or falling back
+            except _ModelUnavailable as e:
+                last_error = e
+                break  # this model is not usable; try the fallback
+            except Exception as e:
+                last_error = e
+                if attempt < retries - 1:
+                    time.sleep(2 * (attempt + 1))
+    raise RuntimeError(f'NIM chat failed on all models {models}: {last_error}')
 
 
 def _frontmatter(url, media_type, collection, title):

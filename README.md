@@ -99,6 +99,7 @@ ai:
   api_key: "${NVIDIA_NIM_API_KEY}"
   base_url: https://integrate.api.nvidia.com/v1
   model: google/gemma-4-31b-it
+  fallback_model: meta/muse-glimmer-30b   # used if the primary model is unavailable
   max_retries: 5
 
 whisper:
